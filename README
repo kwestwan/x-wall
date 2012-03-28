@@ -1,0 +1,22 @@
+*   *
+*   *
+ * *
+  * ----------W a l l
+ * *
+*   *
+*   *
+
+README
+======
+
+  * ipt_XWALL:        Netfilter kernel module, current version only for Linux 2.6.21
+
+  * libipt_XWALL:     Iptables shared library, current version only for iptables 1.3.5
+
+Copyright
+=========
+
+Copyright (C) 2012 Kwest <osnetdev@gmail.com>
+Follow GNU GPL v2 License
+Please see COPYING for more details
+
