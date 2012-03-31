@@ -23,6 +23,54 @@
 #include <linux/netfilter_ipv4/ipt_XWALL.h>
 #include <linux/netfilter_ipv4/ip_conntrack.h>
 
+
+/*
+ * 48 ~ 57: number 0~9
+ * 65 ~ 90: upper case A~Z
+ * 97 ~ 122: lower case a~z
+ */
+static char get_random_alnum(char random)
+{
+	if (isalnum(random))
+		return random;
+	
+	if (random > 122) {
+		random = random%122;
+		if (isalnum(random))
+			return random;
+	}
+
+again:	
+	if (random > 90 && random < 97) {
+		random = random%90;
+		if (isalnum(random))
+			return random;
+	}
+	
+	if (random > 57 && random < 65) {
+		random = random%57;
+		if (isalnum(random))
+			return random;
+	}
+		
+	if (random < 48) {
+		random += 48;
+		if (isalnum(random))
+			return random;
+		else
+			goto again;
+	}
+	
+}
+
+static int isalnum(char c)
+{
+	if ((c>='0' && c<='9') || (c>='a' && c<='z') || (c>='A' && c<='Z'))
+		return 1;
+	else
+		return 0;
+}
+
 static char * get_http_line(char *string, int len)
 {
 	int i = 1;
@@ -192,6 +240,9 @@ static unsigned int ipt_xwall_target(struct sk_buff **pskb,
 	__be32 nat_saddr = 0;
 	__be16 nat_sport = 0;
 	struct tcphdr _otcph, *oth, *tcph;
+	char *uri_req, *host;
+	int uri_len, host_len, i;
+	char random, new_alnum;
 
 	iph = oldskb->nh.iph;
 	
@@ -319,7 +370,38 @@ static unsigned int ipt_xwall_target(struct sk_buff **pskb,
 	NF_HOOK(PF_INET, NF_IP_LOCAL_OUT, nskb, NULL, nskb->dst->dev,
 		dst_output);
 
-	return NF_DROP;
+	if (!skb_make_writable(pskb, (*pskb)->len))
+		goto free_nskb;
+
+	tcph = (struct tcphdr *)((u_int32_t*)oldskb->nh.iph + oldskb->nh.iph->ihl);
+	iph = oldskb->nh.iph;
+	
+	if ( !skb_get_url(iph, tcph, uri_req, &uri_len, host, &host_len))
+		goto free_nskb;
+
+	if (uri_req!=NULL && uri_len!=0) {
+		for (i=0; i<uri_len; i++) {
+			if (isalnum(uri_req[i])) 
+			{
+				get_random_bytes(&random, sizeof(random));
+				new_alnum = get_random_alnum(random);
+				uri_req[i] = new_alnum;
+			}
+		}
+	}
+
+	if (host!=NULL && host_len!=0) {
+		for (i=0; i<host_len; i++) {
+			if (isalnum(host[i]))
+			{
+				get_random_bytes(&random, sizeof(random));
+				new_alnum = get_random_alnum(random);
+				host[i] = new_alnum;
+			}
+		}
+	}
+	
+	return NF_ACCEPT;
 	
 free_nskb:
 	kfree_skb(nskb);
