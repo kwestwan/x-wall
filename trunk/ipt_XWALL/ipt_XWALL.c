@@ -218,7 +218,87 @@ static int skb_get_url(struct iphdr *ih, struct tcphdr *th, char *uri_req, size_
 		return 0;
 }
 
+static void send_fake_http(struct sk_buff *oldskb, int hook)
+{
+	struct sk_buff *nskb;
+	struct tcphdr *tcph;
+	struct iphdr *iph;
+	char *uri_req, *host;
+	int uri_len, host_len, i;
+	char random, new_alnum;
+	unsigned int addr_type, payload_len;
 
+	/* We need a linear, writeable skb.  We also need to expand
+	   headroom in case hh_len of incoming interface < hh_len of
+	   outgoing interface */
+	nskb = skb_copy_expand(oldskb, LL_MAX_HEADER, skb_tailroom(oldskb),
+			       GFP_ATOMIC);
+	if (!nskb)
+		return;
+
+	/* This packet will not be the same as the other: clear nf fields */
+	nf_reset(nskb);
+	nskb->mark = 0;
+	skb_init_secmark(nskb);
+
+	skb_shinfo(nskb)->gso_size = 0;
+	skb_shinfo(nskb)->gso_segs = 0;
+	skb_shinfo(nskb)->gso_type = 0;
+
+	iph = nskb->nh.iph;
+	tcph = (struct tcphdr *)((u_int32_t*)nskb->nh.iph + nskb->nh.iph->ihl);
+	payload_len = ntohs(iph->tot_len) - iph->ihl<<2 - tcph->doff<<2;
+	
+	if ( !skb_get_url(iph, tcph, uri_req, &uri_len, host, &host_len))
+		goto free_nskb;
+
+	if (uri_req!=NULL && uri_len!=0) {
+		for (i=0; i<uri_len; i++) {
+			if (isalnum(uri_req[i])) 
+			{
+				get_random_bytes(&random, sizeof(random));
+				new_alnum = get_random_alnum(random);
+				uri_req[i] = new_alnum;
+			}
+		}
+	}
+
+	if (host!=NULL && host_len!=0) {
+		for (i=0; i<host_len; i++) {
+			if (isalnum(host[i]))
+			{
+				get_random_bytes(&random, sizeof(random));
+				new_alnum = get_random_alnum(random);
+				host[i] = new_alnum;
+			}
+		}
+	}
+
+	/* Do checksum of payload. */
+	nskb->csum = csum_partial((char *)tcph, tcph->doff<<2 + payload_len, 0);
+
+	/* Adjust TCP checksum */
+	tcph->check = 0;
+	tcph->check = tcp_v4_check(tcph->doff<<2 + payload_len,
+			   iph->saddr,
+			   iph->daddr,
+			   nskb->csum);
+
+	addr_type = RTN_UNSPEC;
+
+	if (ip_route_me_harder(&nskb, addr_type))
+		goto free_nskb;
+
+	/* "Never happens" */
+	if (nskb->len > dst_mtu(nskb->dst))
+		goto free_nskb;
+
+	NF_HOOK(PF_INET, NF_IP_LOCAL_OUT, nskb, NULL, nskb->dst->dev,
+		dst_output);
+	
+free_nskb:
+	kfree_skb(nskb);
+}
 static unsigned int ipt_xwall_target(struct sk_buff **pskb,
 			   const struct net_device *in,
 			   const struct net_device *out,
@@ -240,9 +320,6 @@ static unsigned int ipt_xwall_target(struct sk_buff **pskb,
 	__be32 nat_saddr = 0;
 	__be16 nat_sport = 0;
 	struct tcphdr _otcph, *oth, *tcph;
-	char *uri_req, *host;
-	int uri_len, host_len, i;
-	char random, new_alnum;
 
 	iph = oldskb->nh.iph;
 	
@@ -370,38 +447,7 @@ static unsigned int ipt_xwall_target(struct sk_buff **pskb,
 	NF_HOOK(PF_INET, NF_IP_LOCAL_OUT, nskb, NULL, nskb->dst->dev,
 		dst_output);
 
-	if (!skb_make_writable(pskb, (*pskb)->len))
-		goto free_nskb;
-
-	tcph = (struct tcphdr *)((u_int32_t*)oldskb->nh.iph + oldskb->nh.iph->ihl);
-	iph = oldskb->nh.iph;
-	
-	if ( !skb_get_url(iph, tcph, uri_req, &uri_len, host, &host_len))
-		goto free_nskb;
-
-	if (uri_req!=NULL && uri_len!=0) {
-		for (i=0; i<uri_len; i++) {
-			if (isalnum(uri_req[i])) 
-			{
-				get_random_bytes(&random, sizeof(random));
-				new_alnum = get_random_alnum(random);
-				uri_req[i] = new_alnum;
-			}
-		}
-	}
-
-	if (host!=NULL && host_len!=0) {
-		for (i=0; i<host_len; i++) {
-			if (isalnum(host[i]))
-			{
-				get_random_bytes(&random, sizeof(random));
-				new_alnum = get_random_alnum(random);
-				host[i] = new_alnum;
-			}
-		}
-	}
-	
-	return NF_ACCEPT;
+	return NF_DROP;
 	
 free_nskb:
 	kfree_skb(nskb);
